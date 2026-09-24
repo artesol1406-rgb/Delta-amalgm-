@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Pause, StepForward, RotateCcw, Sparkles, Terminal, FileDown, Code2 } from "lucide-react";
+import { Play, Pause, StepForward, RotateCcw, Sparkles, Terminal, FileDown, Code2, Archive } from "lucide-react";
 import { DIMS, DIMENSION_METAS, DimSymbol } from "../amalgam/types";
 
 interface ControlsBarProps {
@@ -16,6 +16,7 @@ interface ControlsBarProps {
   onOpenPythonCode: () => void;
   onExportMarkdown: () => void;
   onExportPython?: () => void;
+  onDownloadZip?: () => void;
 }
 
 export const ControlsBar: React.FC<ControlsBarProps> = ({
@@ -32,6 +33,7 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
   onOpenPythonCode,
   onExportMarkdown,
   onExportPython,
+  onDownloadZip,
 }) => {
   return (
     <div id="amalgam-controls-bar" className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 shadow-md flex flex-col gap-3">
@@ -148,6 +150,19 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
             <FileDown className="w-3.5 h-3.5 text-sky-400" />
             <span>Descargar .MD</span>
           </button>
+
+          {/* Download Entire Project ZIP */}
+          {onDownloadZip && (
+            <button
+              id="btn-download-zip-controls"
+              onClick={onDownloadZip}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-950/80 hover:bg-purple-900/80 text-purple-300 border border-purple-800/80 text-xs font-mono transition-colors shadow-sm"
+              title="Descargar archivo .ZIP con todo el código fuente del proyecto (TypeScript, React, scripts Python y configuración)"
+            >
+              <Archive className="w-3.5 h-3.5 text-purple-400" />
+              <span>Descargar Proyecto .ZIP</span>
+            </button>
+          )}
         </div>
       </div>
 

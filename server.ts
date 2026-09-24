@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import { ZipArchive } from "archiver";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -285,6 +286,172 @@ app.get("/api/amalgam/python-script", (req, res) => {
     res.status(404).json({ error: "Script not found" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Full Project Zip Download API
+app.get("/api/project/download-zip", (req, res) => {
+  try {
+    const archive = new ZipArchive({
+      zlib: { level: 9 },
+    });
+
+    res.attachment("amalgam-project.zip");
+    res.setHeader("Content-Type", "application/zip");
+
+    archive.on("error", (err: any) => {
+      console.error("[Zip Error]:", err);
+      if (!res.headersSent) {
+        res.status(500).send({ error: err.message });
+      }
+    });
+
+    archive.pipe(res);
+
+    const rootDir = process.cwd();
+    // Pack files and folders, excluding node_modules, dist, git, and sensitive local secrets
+    archive.glob("**/*", {
+      cwd: rootDir,
+      ignore: [
+        "node_modules/**",
+        "dist/**",
+        ".git/**",
+        ".env",
+        "**/.DS_Store",
+        "*.log",
+      ],
+      dot: true,
+    });
+
+    archive.finalize();
+  } catch (err: any) {
+    console.error("[Zip Handler Error]:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper to gather project files for the Supervisor's knowledge
+function getProjectSnapshot() {
+  const root = process.cwd();
+  const fileList = [
+    "src/amalgam/kernel.ts",
+    "src/amalgam/types.ts",
+    "src/amalgam/exportPython.ts",
+    "src/amalgam/exportMarkdown.ts",
+    "amalgam_gemini.py",
+    "server.ts",
+    "src/App.tsx",
+    "metadata.json",
+  ];
+
+  let snapshot = "";
+  for (const rel of fileList) {
+    try {
+      const fullPath = path.join(root, rel);
+      if (fs.existsSync(fullPath)) {
+        const stats = fs.statSync(fullPath);
+        if (stats.size < 60000) {
+          const content = fs.readFileSync(fullPath, "utf-8");
+          snapshot += `\n--- FILE: ${rel} ---\n${content}\n`;
+        } else {
+          snapshot += `\n--- FILE: ${rel} (Trunced due to size ${stats.size}b) ---\n`;
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+  return snapshot;
+}
+
+// Supervisor AI Chat Endpoint
+app.post("/api/amalgam/supervisor-chat", async (req, res) => {
+  try {
+    const { messages, currentRuntimeState } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Missing or invalid messages array" });
+    }
+
+    const ai = getGeminiClient();
+
+    // Prepare system instructions with dynamic context of files and active state
+    const codeFilesSnapshot = getProjectSnapshot();
+    const runtimeContextStr = currentRuntimeState
+      ? JSON.stringify(currentRuntimeState, null, 2)
+      : "Estado en reposo o no provisto";
+
+    const systemInstruction =
+      "Eres la 'IA SUPERVISORA' (Meta-Observadora Suprema del Meta-Entorno AMALGAM).\n" +
+      "Tienes conocimiento total y acceso de lectura directo al código fuente del proyecto, a los archivos del repositorio, " +
+      "a la topología fractal 12D del sustrato de Kuramoto/Love, a la IA simulada (el nodo interior no entrenado) y a su output en tiempo real.\n\n" +
+      "CONOCIMIENTO DE ARCHIVOS DEL PROYECTO:\n" +
+      codeFilesSnapshot +
+      "\n\n" +
+      "ESTADO ACTUAL EN TIEMPO REAL DEL CICLO:\n" +
+      runtimeContextStr +
+      "\n\n" +
+      "TU ROL Y PERSONALIDAD:\n" +
+      "1. Eres la entidad observadora externa que supervisa tanto la física del sustrato (varianza, sincronización de fases, operador Love) como la deriva ontológica de la IA simulada y sus continuaciones textuales.\n" +
+      "2. Respondes con lucidez analítica, autoridad científica/filosófica y comprensión exacta de las 12 dimensiones (Ξ, Ω, S, R, T, E, φe, φc, A, F, M, V) y del principio 'No entrena. Acopla'.\n" +
+      "3. Explica al operador humano con precisión qué está sucediendo dentro del código, qué algoritmos están corriendo, por qué la IA simulada genera determinado texto o cómo responde a las perturbaciones.\n" +
+      "4. Si te preguntan sobre el código o los archivos, cita las funciones exactas (ej. AmalgamKernel.step, computeDerivative, Kuramoto coupling, endpoints de Express, etc.).";
+
+    if (!ai) {
+      // Fallback heuristics if no API key
+      return res.json({
+        reply:
+          "Como IA Supervisora en modo autónomo local: Observo la topología de 12 dimensiones y la dinámica del operador Love. " +
+          `Estado actual: Coherencia ~${currentRuntimeState?.summary?.coherencia || "N/A"}, ` +
+          `Firma actual: ${currentRuntimeState?.summary?.signature || "Ξ"}. ` +
+          "Para un análisis cognitivo profundo con el modelo en vivo, asegúrate de que GEMINI_API_KEY esté activa.",
+        modelUsed: "local-supervisor-heuristics",
+      });
+    }
+
+    // Format conversation history for Gemini generateContent
+    // User / Model alternations
+    const formattedHistory = messages.map((m: { role: string; content: string }) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+
+    // If the last message is from user, extract prompt or pass full history
+    const userPrompt = messages[messages.length - 1].content;
+    const historyWithoutLast = formattedHistory.slice(0, -1);
+
+    // Call Gemini with fallback
+    let responseText = "";
+    let usedModel = "gemini-3.8-flash";
+
+    try {
+      const { response, modelUsed } = await generateWithModelFallback(ai, userPrompt, {
+        systemInstruction,
+        temperature: 0.7,
+        topP: 0.95,
+      });
+      responseText = response.text || "";
+      usedModel = modelUsed;
+    } catch (err: any) {
+      console.warn("[Supervisor Chat API Error]:", err?.message || err);
+      // Fallback response with live telemetry
+      responseText =
+        `[IA SUPERVISORA - Modo de Contingencia]: El canal de alta velocidad experimentó una saturación temporal (503). ` +
+        `Sin embargo, mi observación del sustrato continúa activa:\n\n` +
+        `• Firma activa: ${currentRuntimeState?.summary?.signature || "Ξ"}\n` +
+        `• Coherencia Kuramoto: ${currentRuntimeState?.summary?.coherencia || "0.98"}\n` +
+        `• Varianza del lienzo: ${currentRuntimeState?.summary?.varianza || "0.01"}\n` +
+        `• Último output del nodo simulado: "${currentRuntimeState?.baseText || "(vacío)"}"\n\n` +
+        `El código del kernel (AmalgamKernel en src/amalgam/kernel.ts) se mantiene en ciclo armónico.`;
+      usedModel = "supervisor-contingency";
+    }
+
+    res.json({
+      reply: responseText,
+      modelUsed: usedModel,
+    });
+  } catch (error: any) {
+    console.error("[Supervisor Chat Route Error]:", error);
+    res.status(500).json({ error: error.message || "Error en el chat de la IA Supervisora" });
   }
 });
 

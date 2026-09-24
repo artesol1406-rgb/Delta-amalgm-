@@ -9,7 +9,8 @@ import { ControlsBar } from "./components/ControlsBar";
 import { InspectorPanels } from "./components/InspectorPanels";
 import { HistoryLogs } from "./components/HistoryLogs";
 import { PythonScriptViewer } from "./components/PythonScriptViewer";
-import { Sparkles, Terminal, Activity, Layers, Cpu, ShieldCheck, FileDown, Code2 } from "lucide-react";
+import { SupervisorChat } from "./components/SupervisorChat";
+import { Sparkles, Terminal, Activity, Layers, Cpu, ShieldCheck, FileDown, Code2, Archive } from "lucide-react";
 
 export default function App() {
   // Kernel Engine instance
@@ -304,6 +305,16 @@ export default function App() {
     downloadPythonFile(py, filename);
   }, [logs, summary, baseText, guidance, iteration]);
 
+  // Download entire project zip
+  const handleDownloadZip = useCallback(() => {
+    const link = document.createElement("a");
+    link.href = "/api/project/download-zip";
+    link.download = `amalgam-project-${Date.now()}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, []);
+
   return (
     <div id="amalgam-app" className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500 selection:text-white">
       {/* Top Navigation & Status Bar */}
@@ -367,6 +378,16 @@ export default function App() {
               <FileDown className="w-3.5 h-3.5 text-sky-400" />
               <span>Descargar .MD</span>
             </button>
+
+            <button
+              id="btn-download-zip-header"
+              onClick={handleDownloadZip}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-mono transition-colors shadow-sm"
+              title="Descargar todo el proyecto completo en archivo .ZIP"
+            >
+              <Archive className="w-3.5 h-3.5 text-purple-400" />
+              <span>Descargar Proyecto .ZIP</span>
+            </button>
           </div>
         </div>
       </header>
@@ -397,6 +418,7 @@ export default function App() {
           onOpenPythonCode={() => setIsPythonModalOpen(true)}
           onExportMarkdown={handleExportMarkdown}
           onExportPython={handleExportPython}
+          onDownloadZip={handleDownloadZip}
         />
 
         {/* Central Core: Left Topology Visualizer, Right Inspector & Logs */}
@@ -440,6 +462,14 @@ export default function App() {
             <InspectorPanels
               summary={summary}
               kernelValues={kernelValues}
+              baseText={baseText}
+              guidance={guidance}
+              iteration={iteration}
+            />
+
+            {/* Supervisor AI Chat Interface with full code awareness */}
+            <SupervisorChat
+              summary={summary}
               baseText={baseText}
               guidance={guidance}
               iteration={iteration}
