@@ -1,5 +1,5 @@
 import React from "react";
-import { Play, Pause, StepForward, RotateCcw, Sparkles, Terminal, FileDown, Code2, Archive } from "lucide-react";
+import { Play, Pause, StepForward, RotateCcw, Sparkles, Terminal, FileDown, Code2, Archive, Zap, Key } from "lucide-react";
 import { DIMS, DIMENSION_METAS, DimSymbol } from "../amalgam/types";
 
 interface ControlsBarProps {
@@ -10,13 +10,15 @@ interface ControlsBarProps {
   onManualPerturb: (symbol: DimSymbol) => void;
   speedMs: number;
   onChangeSpeed: (ms: number) => void;
-  baseSource: "gemini" | "simulated";
-  onToggleBaseSource: (src: "gemini" | "simulated") => void;
+  baseSource: "gemini" | "groq" | "simulated";
+  onToggleBaseSource: (src: "gemini" | "groq" | "simulated") => void;
   isProcessing: boolean;
   onOpenPythonCode: () => void;
   onExportMarkdown: () => void;
   onExportPython?: () => void;
   onDownloadZip?: () => void;
+  groqApiKey?: string;
+  onOpenGroqModal?: () => void;
 }
 
 export const ControlsBar: React.FC<ControlsBarProps> = ({
@@ -34,6 +36,8 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
   onExportMarkdown,
   onExportPython,
   onDownloadZip,
+  groqApiKey,
+  onOpenGroqModal,
 }) => {
   return (
     <div id="amalgam-controls-bar" className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 shadow-md flex flex-col gap-3">
@@ -102,19 +106,58 @@ export const ControlsBar: React.FC<ControlsBarProps> = ({
             </select>
           </div>
 
-          <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/80">
-            <span className="text-slate-400">Modelo Base:</span>
-            <button
-              id="btn-toggle-base-source"
-              onClick={() => onToggleBaseSource(baseSource === "gemini" ? "simulated" : "gemini")}
-              className={`px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
-                baseSource === "gemini"
-                  ? "bg-indigo-950 text-indigo-300 border-indigo-700"
-                  : "bg-slate-700 text-slate-300 border-slate-600"
-              }`}
-            >
-              {baseSource === "gemini" ? "Gemini Base Mode" : "Estocástico Rápido"}
-            </button>
+          <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-1.5 rounded-lg border border-slate-700/80">
+            <span className="text-slate-400">Motor Ciclo:</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                id="btn-source-groq"
+                onClick={() => {
+                  if (!groqApiKey && onOpenGroqModal) {
+                    onOpenGroqModal();
+                  }
+                  onToggleBaseSource("groq");
+                }}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
+                  baseSource === "groq"
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/50 font-semibold"
+                    : "bg-slate-900 text-slate-400 border-slate-700 hover:text-slate-200"
+                }`}
+                title="Groq: openai/gpt-oss-120b"
+              >
+                <Zap className="w-3 h-3 text-amber-400" />
+                <span>Groq 120b</span>
+              </button>
+
+              <button
+                type="button"
+                id="btn-source-gemini"
+                onClick={() => onToggleBaseSource("gemini")}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
+                  baseSource === "gemini"
+                    ? "bg-indigo-950 text-indigo-300 border-indigo-700 font-semibold"
+                    : "bg-slate-900 text-slate-400 border-slate-700 hover:text-slate-200"
+                }`}
+                title="Google Gemini Flash"
+              >
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+                <span>Gemini</span>
+              </button>
+
+              <button
+                type="button"
+                id="btn-source-simulated"
+                onClick={() => onToggleBaseSource("simulated")}
+                className={`px-2 py-0.5 rounded text-xs font-mono transition-colors border ${
+                  baseSource === "simulated"
+                    ? "bg-slate-700 text-slate-200 border-slate-500 font-semibold"
+                    : "bg-slate-900 text-slate-400 border-slate-700 hover:text-slate-200"
+                }`}
+                title="Estocástico Rápido local"
+              >
+                Simulado
+              </button>
+            </div>
           </div>
 
           {/* Python Script Direct Access */}

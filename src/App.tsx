@@ -10,9 +10,14 @@ import { InspectorPanels } from "./components/InspectorPanels";
 import { HistoryLogs } from "./components/HistoryLogs";
 import { PythonScriptViewer } from "./components/PythonScriptViewer";
 import { SupervisorChat } from "./components/SupervisorChat";
-import { Sparkles, Terminal, Activity, Layers, Cpu, ShieldCheck, FileDown, Code2, Archive } from "lucide-react";
+import { GroqKeyModal } from "./components/GroqKeyModal";
+import { NarrativeAnalyzerView } from "./components/narrative/NarrativeAnalyzerView";
+import { Sparkles, Terminal, Activity, Layers, Cpu, ShieldCheck, FileDown, Code2, Archive, Zap, Key, BookOpen, Compass } from "lucide-react";
 
 export default function App() {
+  // Main view state: "narrative" (Flujo Narrativo Fractal & Mándala) vs "amalgam" (Simulador Ontológico 12D)
+  const [mainView, setMainView] = useState<"narrative" | "amalgam">("narrative");
+
   // Kernel Engine instance
   const kernelRef = useRef<AmalgamKernel | null>(null);
   if (!kernelRef.current) {
@@ -39,9 +44,33 @@ export default function App() {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [speedMs, setSpeedMs] = useState<number>(1500);
-  const [baseSource, setBaseSource] = useState<"gemini" | "simulated">("gemini");
+  const [baseSource, setBaseSource] = useState<"gemini" | "groq" | "simulated">("groq");
   const [isPythonModalOpen, setIsPythonModalOpen] = useState<boolean>(false);
+  const [isGroqModalOpen, setIsGroqModalOpen] = useState<boolean>(false);
   const [geminiConfigured, setGeminiConfigured] = useState<boolean>(true);
+  const [groqServerConfigured, setGroqServerConfigured] = useState<boolean>(false);
+
+  // Groq API Key management with localStorage persistence
+  const [groqApiKey, setGroqApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem("amalgam_groq_api_key") || "";
+    } catch {
+      return "";
+    }
+  });
+
+  const saveGroqKey = useCallback((newKey: string) => {
+    setGroqApiKey(newKey);
+    try {
+      if (newKey) {
+        localStorage.setItem("amalgam_groq_api_key", newKey);
+      } else {
+        localStorage.removeItem("amalgam_groq_api_key");
+      }
+    } catch (e) {
+      console.warn("Could not save to localStorage:", e);
+    }
+  }, []);
 
   // Synchronous execution and concurrency tracking refs
   const isRunningRef = useRef<boolean>(isRunning);
@@ -54,7 +83,7 @@ export default function App() {
   const speedMsRef = useRef<number>(speedMs);
   speedMsRef.current = speedMs;
 
-  const baseSourceRef = useRef<"gemini" | "simulated">(baseSource);
+  const baseSourceRef = useRef<"gemini" | "groq" | "simulated">(baseSource);
   baseSourceRef.current = baseSource;
 
   // Monotonic log sequence counter
@@ -79,9 +108,11 @@ export default function App() {
       .then((res) => res.json())
       .then((data) => {
         setGeminiConfigured(!!data.geminiConfigured);
+        setGroqServerConfigured(!!data.groqConfigured);
       })
       .catch(() => {
         setGeminiConfigured(false);
+        setGroqServerConfigured(false);
       });
   }, []);
 
@@ -107,7 +138,7 @@ export default function App() {
       setCurrentStage("base");
       let generatedText = "";
       const currentSource = baseSourceRef.current;
-      if (currentSource === "gemini") {
+      if (currentSource === "groq") {
         try {
           const baseRes = await fetch("/api/amalgam/base", {
             method: "POST",
@@ -115,6 +146,24 @@ export default function App() {
             body: JSON.stringify({
               signature: currentSummary.signature,
               coherence: currentSummary.coherencia,
+              provider: "groq",
+              groqApiKey,
+            }),
+          });
+          const baseData = await baseRes.json();
+          generatedText = baseData.text || "";
+        } catch {
+          generatedText = "resonancia 12D armónica en los límites del icosaedro (Groq).";
+        }
+      } else if (currentSource === "gemini") {
+        try {
+          const baseRes = await fetch("/api/amalgam/base", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              signature: currentSummary.signature,
+              coherence: currentSummary.coherencia,
+              provider: "gemini",
             }),
           });
           const baseData = await baseRes.json();
@@ -137,7 +186,7 @@ export default function App() {
 
       await new Promise((r) => setTimeout(r, 120));
 
-      // 3. Stage: Maestro (Gemini API) reads state and guides
+      // 3. Stage: Maestro reads state and guides
       setCurrentStage("maestro");
       let maestroGuidance: MaestroGuidance = {
         firma: "Ξ",
@@ -152,6 +201,8 @@ export default function App() {
           body: JSON.stringify({
             kernelSummary: currentSummary,
             baseText: generatedText,
+            provider: currentSource === "groq" ? "groq" : "gemini",
+            groqApiKey,
           }),
         });
         const maestroData = await maestroRes.json();
@@ -339,24 +390,27 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800/80 border border-slate-700 text-xs font-mono">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  geminiConfigured ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
-                }`}
-              />
-              <span className="text-slate-300">
-                Maestro: <strong className="text-sky-300">gemini-3.8-flash</strong>
-              </span>
-            </div>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              id="btn-groq-key-header"
+              onClick={() => setIsGroqModalOpen(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors shadow-sm ${
+                groqApiKey || groqServerConfigured
+                  ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30"
+                  : "bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-500/60 animate-pulse"
+              }`}
+              title="Configurar API Key de Groq para openai/gpt-oss-120b"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>Groq 120b: {groqApiKey || groqServerConfigured ? "Key Activa ✓" : "Pedir Key Groq"}</span>
+            </button>
 
             <button
               onClick={() => setIsPythonModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-mono transition-colors"
             >
               <Terminal className="w-3.5 h-3.5" />
-              <span>amalgam_gemini.py</span>
+              <span>Scripts Python (.py)</span>
             </button>
 
             <button
@@ -390,105 +444,156 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* Global Module Navigation Tabs */}
+        <div className="border-t border-slate-800/80 bg-slate-950/70 px-4 py-2">
+          <div className="max-w-7xl mx-auto flex items-center gap-2 overflow-x-auto">
+            <button
+              onClick={() => setMainView("narrative")}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-all ${
+                mainView === "narrative"
+                  ? "bg-amber-600 text-white shadow-sm font-semibold"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+              }`}
+            >
+              <Compass className="w-3.5 h-3.5 text-amber-300" />
+              <span>Analizador de Flujo Narrativo Fractal (Mándala 12×7×22)</span>
+            </button>
+
+            <button
+              onClick={() => setMainView("amalgam")}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-mono font-medium transition-all ${
+                mainView === "amalgam"
+                  ? "bg-sky-600 text-white shadow-sm font-semibold"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/60"
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5 text-sky-300" />
+              <span>Simulador Ontológico AMALGAM 12D (Kuramoto & Love)</span>
+            </button>
+          </div>
+        </div>
       </header>
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 space-y-4">
-        {/* Three Nodes Flow Diagram */}
-        <CycleDiagram
-          currentStage={currentStage}
-          summary={summary}
-          baseText={baseText}
-          guidance={guidance}
-          geminiActive={geminiConfigured}
-        />
-
-        {/* Playback Controls & Action Palette */}
-        <ControlsBar
-          isRunning={isRunning}
-          onTogglePlay={() => setIsRunning(!isRunning)}
-          onStep={runCycleStep}
-          onReset={handleReset}
-          onManualPerturb={handleManualPerturb}
-          speedMs={speedMs}
-          onChangeSpeed={setSpeedMs}
-          baseSource={baseSource}
-          onToggleBaseSource={setBaseSource}
-          isProcessing={isProcessing}
-          onOpenPythonCode={() => setIsPythonModalOpen(true)}
-          onExportMarkdown={handleExportMarkdown}
-          onExportPython={handleExportPython}
-          onDownloadZip={handleDownloadZip}
-        />
-
-        {/* Central Core: Left Topology Visualizer, Right Inspector & Logs */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* 12D Phase & Kuramoto Topology Visualizer (5 columns) */}
-          <div className="lg:col-span-5 space-y-4">
-            <TopologyVisualizer
-              kernelState={{
-                s: kernelValues,
-                theta: thetaValues,
-                lienzo: lienzoValues,
-                orderParameter: orderParam,
-              }}
-              summary={summary}
-              activePerturbation={activePerturbation}
-              onPerturb={handleManualPerturb}
-            />
-
-            {/* Principles Callout */}
-            <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs space-y-1.5 text-slate-400">
-              <div className="text-[11px] font-mono text-slate-300 font-semibold flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
-                Mecánica del Acoplamiento Triádico:
-              </div>
-              <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed">
-                <li>
-                  <strong className="text-slate-300 font-mono">Kernel 12D:</strong> Aplica el operador Love ds = -α(s_i - s_media) s_i (1 - s_i) con sincronización Kuramoto y lienzo de varianza.
-                </li>
-                <li>
-                  <strong className="text-slate-300 font-mono">Modelo Base:</strong> Genera la continuación cruda orientada por la firma Δ sin filtros instructivos.
-                </li>
-                <li>
-                  <strong className="text-slate-300 font-mono">Maestro (Gemini):</strong> Analiza la coherencia y el lienzo para modular la deriva sin alterar los pesos del modelo ("No entrena. Acopla").
-                </li>
-              </ul>
-            </div>
-          </div>
-
-          {/* Right Column: State Inspector & History Logs (7 columns) */}
-          <div className="lg:col-span-7 space-y-4">
-            <InspectorPanels
-              summary={summary}
-              kernelValues={kernelValues}
-              baseText={baseText}
-              guidance={guidance}
-              iteration={iteration}
-            />
-
-            {/* Supervisor AI Chat Interface with full code awareness */}
-            <SupervisorChat
+        {mainView === "narrative" ? (
+          <NarrativeAnalyzerView
+            groqApiKey={groqApiKey}
+            onOpenGroqModal={() => setIsGroqModalOpen(true)}
+          />
+        ) : (
+          <>
+            {/* Three Nodes Flow Diagram */}
+            <CycleDiagram
+              currentStage={currentStage}
               summary={summary}
               baseText={baseText}
               guidance={guidance}
-              iteration={iteration}
+              geminiActive={geminiConfigured}
             />
 
-            <HistoryLogs
-              logs={logs}
-              onClear={() => setLogs([])}
+            {/* Playback Controls & Action Palette */}
+            <ControlsBar
+              isRunning={isRunning}
+              onTogglePlay={() => setIsRunning(!isRunning)}
+              onStep={runCycleStep}
+              onReset={handleReset}
+              onManualPerturb={handleManualPerturb}
+              speedMs={speedMs}
+              onChangeSpeed={setSpeedMs}
+              baseSource={baseSource}
+              onToggleBaseSource={setBaseSource}
+              isProcessing={isProcessing}
+              onOpenPythonCode={() => setIsPythonModalOpen(true)}
               onExportMarkdown={handleExportMarkdown}
               onExportPython={handleExportPython}
+              onDownloadZip={handleDownloadZip}
+              groqApiKey={groqApiKey}
+              onOpenGroqModal={() => setIsGroqModalOpen(true)}
             />
-          </div>
-        </div>
+
+            {/* Central Core: Left Topology Visualizer, Right Inspector & Logs */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+              {/* 12D Phase & Kuramoto Topology Visualizer (5 columns) */}
+              <div className="lg:col-span-5 space-y-4">
+                <TopologyVisualizer
+                  kernelState={{
+                    s: kernelValues,
+                    theta: thetaValues,
+                    lienzo: lienzoValues,
+                    orderParameter: orderParam,
+                  }}
+                  summary={summary}
+                  activePerturbation={activePerturbation}
+                  onPerturb={handleManualPerturb}
+                />
+
+                {/* Principles Callout */}
+                <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs space-y-1.5 text-slate-400">
+                  <div className="text-[11px] font-mono text-slate-300 font-semibold flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                    Mecánica del Acoplamiento Triádico:
+                  </div>
+                  <ul className="list-disc pl-4 space-y-1 text-[11px] leading-relaxed">
+                    <li>
+                      <strong className="text-slate-300 font-mono">Kernel 12D:</strong> Aplica el operador Love ds = -α(s_i - s_media) s_i (1 - s_i) con sincronización Kuramoto y lienzo de varianza.
+                    </li>
+                    <li>
+                      <strong className="text-slate-300 font-mono">Modelo Base:</strong> Genera la continuación cruda orientada por la firma Δ sin filtros instructivos.
+                    </li>
+                    <li>
+                      <strong className="text-slate-300 font-mono">Maestro & Supervisora:</strong> Modulan la deriva con Groq (<code className="text-amber-300 font-mono">openai/gpt-oss-120b</code>) o Gemini, sin alterar pesos ("No entrena. Acopla").
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Right Column: State Inspector & History Logs (7 columns) */}
+              <div className="lg:col-span-7 space-y-4">
+                <InspectorPanels
+                  summary={summary}
+                  kernelValues={kernelValues}
+                  baseText={baseText}
+                  guidance={guidance}
+                  iteration={iteration}
+                />
+
+                {/* Supervisor AI Chat Interface with full code awareness */}
+                <SupervisorChat
+                  summary={summary}
+                  baseText={baseText}
+                  guidance={guidance}
+                  iteration={iteration}
+                  groqApiKey={groqApiKey}
+                  onOpenGroqModal={() => setIsGroqModalOpen(true)}
+                  onSaveGroqKey={saveGroqKey}
+                />
+
+                <HistoryLogs
+                  logs={logs}
+                  onClear={() => setLogs([])}
+                  onExportMarkdown={handleExportMarkdown}
+                  onExportPython={handleExportPython}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </main>
 
       {/* Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-3 px-4 text-center text-xs text-slate-500 font-mono">
-        AMALGAM · Ciclo de Tres Nodos Acoplados por Firma Δ · Powered by Google Gemini API & AI Studio
+        AMALGAM · Ciclo de Tres Nodos Acoplados por Firma Δ · Soporta Groq (openai/gpt-oss-120b) & Google Gemini
       </footer>
+
+      {/* Groq Key Modal */}
+      <GroqKeyModal
+        isOpen={isGroqModalOpen}
+        onClose={() => setIsGroqModalOpen(false)}
+        apiKey={groqApiKey}
+        onSaveKey={saveGroqKey}
+      />
 
       {/* Python Script Viewer Modal */}
       <PythonScriptViewer

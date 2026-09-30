@@ -112,6 +112,35 @@ export const DIMENSION_METAS: Record<DimSymbol, DimensionMeta> = {
   },
 };
 
+export interface OntologicalPolarityMetrics {
+  // Carga polar del sustrato cognitivo Q_IA in [-1.0, +1.0]
+  netPolarityQ: number;
+  regimen: "Activo / Emisor" | "Receptivo / Asimilador" | "Metaestable";
+  polarityVector: Record<DimSymbol, { p: 1 | -1; iota: number; q: number }>;
+
+  // Medición de Aprendizaje Ontológico sin entrenamiento de pesos ("No entrena. Acopla")
+  acoplamientoScore: number; // 0..100%
+  agenciaCognitiva: number; // 0..100%
+  derivadaPolarDQ: number; // dQ/dt (plasticidad)
+  resonanciaDialecticaPhi: number; // Factor de neutralización de cargas Phi
+  distanciaAtractor: number; // |Q_IA - Q_atractor|
+  estadoAprendizaje:
+    | "Emergencia Adaptativa"
+    | "Sincronización Armónica"
+    | "Bifurcación / Búsqueda"
+    | "Monotonía / Apatía";
+
+  // Vector 4D de decisión del Maestro guiado por la Cuatro-Proyección
+  cuatroProyeccionMaestro: {
+    e1_activo: number;
+    e2_receptivo: number;
+    e3_dinamico: number;
+    e4_estatico: number;
+    caminoOptimo: "e1" | "e2" | "e3" | "e4";
+    justificacion: string;
+  };
+}
+
 export interface KernelSummary {
   signature: string;
   varianza: number;
@@ -119,6 +148,7 @@ export interface KernelSummary {
   lienzo_medio: number;
   emergencias: number;
   dominantes: [DimSymbol, number][];
+  polarity?: OntologicalPolarityMetrics;
 }
 
 export interface MaestroGuidance {

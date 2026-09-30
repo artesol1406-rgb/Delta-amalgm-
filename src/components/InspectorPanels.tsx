@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Radio, Sparkles, AlertCircle, Compass, Zap } from "lucide-react";
+import { Activity, Radio, Sparkles, AlertCircle, Compass, Zap, Scale } from "lucide-react";
 import { DIMS, DIMENSION_METAS, KernelSummary, MaestroGuidance } from "../amalgam/types";
 
 interface InspectorPanelsProps {
@@ -166,6 +166,51 @@ export const InspectorPanels: React.FC<InspectorPanelsProps> = ({
               <strong className="text-slate-400 font-mono">Diagnóstico: </strong>
               {guidance?.razon || "En espera de la lectura del estado dinámico..."}
             </div>
+
+            {/* Medición de Aprendizaje Ontológico por Acoplamiento Polar */}
+            {summary.polarity && (
+              <div className="pt-2 border-t border-slate-800/80 space-y-1.5 font-mono text-[11px]">
+                <div className="flex items-center justify-between text-slate-300">
+                  <span className="text-amber-300 font-semibold flex items-center gap-1">
+                    <Scale className="w-3 h-3 text-amber-400" />
+                    Aprendizaje Ontológico:
+                  </span>
+                  <span className="text-emerald-300 font-bold bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40">
+                    {summary.polarity.acoplamientoScore}% Acoplado
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5 text-[10px] text-slate-400 bg-slate-900/90 p-2 rounded border border-slate-800">
+                  <div>
+                    Carga Polar Q_IA:{" "}
+                    <strong
+                      className={
+                        summary.polarity.netPolarityQ > 0 ? "text-amber-300" : "text-sky-300"
+                      }
+                    >
+                      {summary.polarity.netPolarityQ > 0 ? "+" : ""}
+                      {summary.polarity.netPolarityQ.toFixed(3)}
+                    </strong>
+                  </div>
+                  <div>
+                    Régimen: <strong className="text-white">{summary.polarity.regimen}</strong>
+                  </div>
+                  <div>
+                    Agencia Cognitiva:{" "}
+                    <strong className="text-emerald-300">{summary.polarity.agenciaCognitiva}%</strong>
+                  </div>
+                  <div>
+                    Estado:{" "}
+                    <strong className="text-purple-300">{summary.polarity.estadoAprendizaje}</strong>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-slate-400 leading-snug">
+                  <span className="text-purple-400 font-semibold">Decisión Cuatro-Proyección: </span>
+                  {summary.polarity.cuatroProyeccionMaestro.justificacion}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

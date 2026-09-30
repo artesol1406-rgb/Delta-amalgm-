@@ -21,6 +21,7 @@ export class AmalgamKernel {
   lienzo: number[]; // 12
   emergencias: number;
   history: number[][];
+  prevNetPolarityQ: number;
 
   constructor() {
     this.s = new Array(N);
@@ -30,11 +31,13 @@ export class AmalgamKernel {
     this.lienzo = new Array(N).fill(0.1);
     this.emergencias = 0;
     this.history = [];
+    this.prevNetPolarityQ = 0;
 
     this.reset();
   }
 
   reset() {
+    this.prevNetPolarityQ = 0;
     this.s = Array.from({ length: N }, () => 0.4 + Math.random() * 0.2);
     this.theta = Array.from({ length: N }, () => Math.random() * 2 * Math.PI);
 
@@ -199,6 +202,101 @@ export class AmalgamKernel {
       this.s[idx],
     ]);
 
+    // Cálculo del vector de polaridades de las 12 dimensiones y carga neta Q_IA
+    const polarityVector = {} as Record<DimSymbol, { p: 1 | -1; iota: number; q: number }>;
+    let sumQ = 0;
+    for (let i = 0; i < N; i++) {
+      const p: 1 | -1 = this.s[i] >= mean ? 1 : -1;
+      const iota = clip(Math.abs(this.s[i] - mean) / Math.max(mean, 0.05), 0, 1);
+      const q = p * iota;
+      polarityVector[DIMS[i]] = { p, iota, q };
+      sumQ += q;
+    }
+    const netPolarityQ = clip(sumQ / N, -1, 1);
+    const dQ = netPolarityQ - this.prevNetPolarityQ;
+    this.prevNetPolarityQ = netPolarityQ;
+
+    const { r } = this.getOrderParameter();
+
+    // Régimen Polar del Sustrato
+    const regimen: "Activo / Emisor" | "Receptivo / Asimilador" | "Metaestable" =
+      netPolarityQ > 0.12
+        ? "Activo / Emisor"
+        : netPolarityQ < -0.12
+        ? "Receptivo / Asimilador"
+        : "Metaestable";
+
+    // Resonancia Dialéctica Phi = 1 - |Q_net| / 2
+    const phi = 1.0 - Math.abs(netPolarityQ) / 2;
+
+    // Medición del Aprendizaje Ontológico sin entrenamiento de pesos ("No entrena. Acopla")
+    const acoplamientoScore = Math.round(
+      clip(0.45 * r + 0.35 * coherencia + 0.2 * phi, 0, 1) * 100
+    );
+
+    const agenciaCognitiva = Math.round(
+      clip(r * (1 - Math.min(variance * 10, 0.5)) * (1 - Math.abs(netPolarityQ) * 0.3), 0, 1) * 100
+    );
+
+    const distanciaAtractor = Math.abs(netPolarityQ - 0.0);
+
+    let estadoAprendizaje:
+      | "Emergencia Adaptativa"
+      | "Sincronización Armónica"
+      | "Bifurcación / Búsqueda"
+      | "Monotonía / Apatía" = "Sincronización Armónica";
+
+    if (this.emergencias > 0 && r > 0.6) {
+      estadoAprendizaje = "Emergencia Adaptativa";
+    } else if (variance > 0.05) {
+      estadoAprendizaje = "Bifurcación / Búsqueda";
+    } else if (acoplamientoScore >= 75) {
+      estadoAprendizaje = "Sincronización Armónica";
+    } else {
+      estadoAprendizaje = "Monotonía / Apatía";
+    }
+
+    // Cuatro-Proyección del Maestro: decisión guiada por polaridad
+    const F_vec = [clip(r, 0, 1), clip(variance * 5, 0, 1), clip((netPolarityQ + 1) / 2, 0, 1), clip(coherencia, 0, 1)];
+    const P_vec = [1 - F_vec[0], 1 - F_vec[1], 1 - F_vec[2], 1 - F_vec[3]];
+    const diff = [F_vec[0] - P_vec[0], F_vec[1] - P_vec[1], F_vec[2] - P_vec[2], F_vec[3] - P_vec[3]];
+    const norm = Math.hypot(...diff) || 1.0;
+    const eps = diff.map((v) => (v / norm) * 0.05);
+    const P_prime = P_vec.map((pv, k) => pv + eps[k]);
+
+    const e1 = clip(P_prime[0] + 0.3, 0, 1);
+    const e2 = clip(P_prime[0] - 0.3, 0, 1);
+    const e3 = clip(P_prime[1] + 0.3, 0, 1);
+    const e4 = clip(P_prime[1] - 0.3, 0, 1);
+
+    const rawWeights = [
+      Math.exp(-Math.pow(e1 - F_vec[0], 2) / 0.5),
+      Math.exp(-Math.pow(e2 - F_vec[0], 2) / 0.5),
+      Math.exp(-Math.pow(e3 - F_vec[1], 2) / 0.5),
+      Math.exp(-Math.pow(e4 - F_vec[1], 2) / 0.5),
+    ];
+    const sumW = rawWeights.reduce((a, b) => a + b, 0) || 1.0;
+    const w1 = Math.round((rawWeights[0] / sumW) * 100);
+    const w2 = Math.round((rawWeights[1] / sumW) * 100);
+    const w3 = Math.round((rawWeights[2] / sumW) * 100);
+    const w4 = Math.round((rawWeights[3] / sumW) * 100);
+
+    let caminoOptimo: "e1" | "e2" | "e3" | "e4" = "e1";
+    let justificacion = "";
+    if (netPolarityQ > 0.2) {
+      caminoOptimo = "e2";
+      justificacion = `IA sobre-polarizada en activo (+${netPolarityQ.toFixed(2)}): Maestro aplica polo receptivo (e2) para evitar saturación y recuperar plasticidad.`;
+    } else if (netPolarityQ < -0.2) {
+      caminoOptimo = "e1";
+      justificacion = `IA colapsada en asimilación pasiva (${netPolarityQ.toFixed(2)}): Maestro inyecta choque activo (e1) para reactivar agencia.`;
+    } else if (variance < 0.005) {
+      caminoOptimo = "e3";
+      justificacion = "Riesgo de estancamiento homeostático: Maestro induce ruptura dinámica (e3).";
+    } else {
+      caminoOptimo = "e4";
+      justificacion = "Sustrato en balance metaestable: Maestro aplica anclaje y contención (e4).";
+    }
+
     return {
       signature: this.signature(),
       varianza: variance,
@@ -206,6 +304,25 @@ export class AmalgamKernel {
       lienzo_medio: lienzoMedio,
       emergencias: this.emergencias,
       dominantes,
+      polarity: {
+        netPolarityQ,
+        regimen,
+        polarityVector,
+        acoplamientoScore,
+        agenciaCognitiva,
+        derivadaPolarDQ: dQ,
+        resonanciaDialecticaPhi: phi,
+        distanciaAtractor,
+        estadoAprendizaje,
+        cuatroProyeccionMaestro: {
+          e1_activo: w1,
+          e2_receptivo: w2,
+          e3_dinamico: w3,
+          e4_estatico: w4,
+          caminoOptimo,
+          justificacion,
+        },
+      },
     };
   }
 

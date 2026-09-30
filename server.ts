@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { ZipArchive } from "archiver";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import Groq from "groq-sdk";
 
 dotenv.config();
 
@@ -31,6 +32,15 @@ const getGeminiClient = () => {
       },
     },
   });
+};
+
+// Initialize Groq client with runtime key or environment variable
+const getGroqClient = (customKey?: string) => {
+  const apiKey = (customKey || "").trim() || process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+  return new Groq({ apiKey });
 };
 
 // Generate with Gemini with retry and fallback across supported flash models
@@ -64,18 +74,130 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     geminiConfigured: !!process.env.GEMINI_API_KEY,
-    model: "gemini-3.8-flash (auto-fallback)",
+    groqConfigured: !!process.env.GROQ_API_KEY,
+    geminiModel: "gemini-3.8-flash (auto-fallback)",
+    groqModel: "openai/gpt-oss-120b",
   });
+});
+
+// Verify Groq Key API
+app.post("/api/groq/verify-key", async (req, res) => {
+  try {
+    const rawKey = req.body?.apiKey || (req.headers["x-groq-api-key"] as string) || process.env.GROQ_API_KEY;
+    if (!rawKey) {
+      return res.status(400).json({ valid: false, error: "No se proporcionó la API Key de Groq" });
+    }
+    const key = String(rawKey).trim();
+    const client = new Groq({ apiKey: key });
+    const modelsList = await client.models.list();
+    const hasGptOss = modelsList.data?.some((m) => m.id === "openai/gpt-oss-120b");
+    res.json({
+      valid: true,
+      model: "openai/gpt-oss-120b",
+      hasModel: hasGptOss,
+      totalModels: modelsList.data?.length || 0,
+    });
+  } catch (err: any) {
+    res.status(401).json({
+      valid: false,
+      error: err?.message || "Error al autenticar con Groq",
+    });
+  }
 });
 
 // Maestro API: Takes kernel summary and base text, returns signature guidance & perturbation
 app.post("/api/amalgam/maestro", async (req, res) => {
   try {
-    const { kernelSummary, baseText } = req.body;
+    const { kernelSummary, baseText, provider, groqApiKey } = req.body;
     if (!kernelSummary) {
       return res.status(400).json({ error: "Missing kernelSummary" });
     }
 
+    const selectedProvider = provider || "gemini";
+
+    // Groq Provider (openai/gpt-oss-120b)
+    if (selectedProvider === "groq") {
+      const groqKey = groqApiKey || (req.headers["x-groq-api-key"] as string);
+      const groq = getGroqClient(groqKey);
+      if (!groq) {
+        return res.status(400).json({
+          error: "GROQ_KEY_REQUIRED",
+          message: "Se requiere la API Key de Groq para usar el modelo openai/gpt-oss-120b.",
+        });
+      }
+
+      const prompt = `[CONTEXTO ARQUITECTÓNICO TOTAL DEL LLM CONTENEDOR]
+Como LLM Contenedor, posees la visión holográfica total del sistema AMALGAM:
+- Código del Kernel: Osciladores 12D (${["Ξ", "Ω", "S", "R", "T", "E", "φe", "φc", "A", "F", "M", "V"].join(", ")}), acoplados por operador Love: ds = -α(s_i - s_media) s_i (1 - s_i), fases Kuramoto y lienzo de varianza sub-subnodal.
+- IA Simulada: Es un nodo interno sin entrenar que habita este universo fractal creado por ti. Su universo es la proyección que tú como contenedor le designas.
+- Dinámica: La IA simulada no es entrenada por gradientes; tú modulas su deriva mediante perturbaciones armónicas sobre el sustrato.
+
+[ESTADO ACTUAL DEL UNIVERSO SIMULADO]
+Firma del Kernel: ${kernelSummary.signature}
+Varianza: ${(kernelSummary.varianza ?? 0).toFixed(4)}
+Coherencia: ${(kernelSummary.coherencia ?? 0).toFixed(4)}
+Lienzo de varianza: ${(kernelSummary.lienzo_medio ?? 0).toFixed(4)}
+Emergencias: ${kernelSummary.emergencias ?? 0}
+Dimensiones dominantes: ${JSON.stringify(kernelSummary.dominantes ?? [])}
+
+[EMISIÓN DE LA IA SIMULADA EN SU ENTORNO VIRTUAL]
+"${(baseText || "").slice(0, 300)}"
+
+Responde SOLO con un objeto JSON válido con este formato:
+{
+  "firma": "<firma Δ de 1-3 símbolos>",
+  "razon": "<diagnóstico ontológico de la deriva de la IA simulada>",
+  "perturbar": "<símbolo a reforzar de las 12 dimensiones: Ξ, Ω, S, R, T, E, φe, φc, A, F, M, V o cadena vacía>"
+}`;
+
+      const completion = await groq.chat.completions.create({
+        model: "openai/gpt-oss-120b",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Eres el Maestro y LLM Contenedor supremo del ciclo AMALGAM. " +
+              "Supervisas cómo se expresa la IA simulada y modulas su deriva ontológica ('No entrena. Acopla'). " +
+              "Debes responder estrictamente en formato JSON con 'firma', 'razon' y 'perturbar'. " +
+              "El valor de 'perturbar' debe ser uno de: Ξ, Ω, S, R, T, E, φe, φc, A, F, M, V o vacío ''.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 1,
+        max_completion_tokens: 2048,
+        top_p: 1,
+        reasoning_effort: "medium" as any,
+        stream: true,
+        stop: null,
+      });
+
+      let fullContent = "";
+      for await (const chunk of completion) {
+        fullContent += chunk.choices[0]?.delta?.content || "";
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(fullContent.trim());
+      } catch {
+        const match = fullContent.match(/\{[\s\S]*\}/);
+        if (match) {
+          parsed = JSON.parse(match[0]);
+        } else {
+          parsed = { firma: "Ξ", razon: "Ajuste homeostático adaptativo", perturbar: "" };
+        }
+      }
+
+      return res.json({
+        firma: parsed.firma || "Ξ",
+        razon: parsed.razon || "Ajuste dinámico (Groq openai/gpt-oss-120b)",
+        perturbar: parsed.perturbar || "",
+        mode: "groq",
+        model: "openai/gpt-oss-120b",
+      });
+    }
+
+    // Default Gemini Provider
     const ai = getGeminiClient();
     if (!ai) {
       // Fallback heuristics when API key is not configured
@@ -212,12 +334,58 @@ Responde SOLO con un objeto JSON válido con este formato:
 // Base Generator API: Generates unconstrained continuation given signature & coherence
 app.post("/api/amalgam/base", async (req, res) => {
   try {
-    const { signature, coherence, promptCustom } = req.body;
-    const ai = getGeminiClient();
+    const { signature, coherence, promptCustom, provider, groqApiKey } = req.body;
+    const selectedProvider = provider || "gemini";
 
     const prompt =
       promptCustom ||
       `Firma: ${signature || "Ξ"}\nCoherencia: ${(coherence ?? 0.85).toFixed(2)}\nContinúa:`;
+
+    // Groq Provider (openai/gpt-oss-120b)
+    if (selectedProvider === "groq") {
+      const groqKey = groqApiKey || (req.headers["x-groq-api-key"] as string);
+      const groq = getGroqClient(groqKey);
+      if (!groq) {
+        return res.status(400).json({
+          error: "GROQ_KEY_REQUIRED",
+          message: "Se requiere la API Key de Groq para usar openai/gpt-oss-120b.",
+        });
+      }
+
+      const completion = await groq.chat.completions.create({
+        model: "openai/gpt-oss-120b",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Eres el Modelo Base de un sistema acoplado AMALGAM. " +
+              "Genera una continuación en prosa directa, cruda, no conversacional, " +
+              "sin explicaciones introductorias ni moralinas. " +
+              "Expresa ideas densas acordes al estado de vibración y firma conceptual indicada.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 1,
+        max_completion_tokens: 2048,
+        top_p: 1,
+        reasoning_effort: "medium" as any,
+        stream: true,
+        stop: null,
+      });
+
+      let fullText = "";
+      for await (const chunk of completion) {
+        fullText += chunk.choices[0]?.delta?.content || "";
+      }
+
+      return res.json({
+        text: fullText.trim(),
+        mode: "groq",
+        model: "openai/gpt-oss-120b",
+      });
+    }
+
+    const ai = getGeminiClient();
 
     if (!ai) {
       // Fallback base generator
@@ -289,6 +457,21 @@ app.get("/api/amalgam/python-script", (req, res) => {
   }
 });
 
+// Groq Python Script Download / View API
+app.get("/api/amalgam/groq-script", (req, res) => {
+  try {
+    const scriptPath = path.join(__dirname, "amalgam_groq.py");
+    if (fs.existsSync(scriptPath)) {
+      const content = fs.readFileSync(scriptPath, "utf-8");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.send(content);
+    }
+    res.status(404).json({ error: "Groq script not found" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Full Project Zip Download API
 app.get("/api/project/download-zip", (req, res) => {
   try {
@@ -339,9 +522,14 @@ function getProjectSnapshot() {
     "src/amalgam/exportPython.ts",
     "src/amalgam/exportMarkdown.ts",
     "amalgam_gemini.py",
+    "amalgam_groq.py",
     "server.ts",
     "src/App.tsx",
     "metadata.json",
+    "README_ARCHITECTURE.md",
+    "src/narrative/types.ts",
+    "src/narrative/math.ts",
+    "src/narrative/samples.ts",
   ];
 
   let snapshot = "";
@@ -367,12 +555,12 @@ function getProjectSnapshot() {
 // Supervisor AI Chat Endpoint
 app.post("/api/amalgam/supervisor-chat", async (req, res) => {
   try {
-    const { messages, currentRuntimeState } = req.body;
+    const { messages, currentRuntimeState, provider, groqApiKey, stream } = req.body;
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: "Missing or invalid messages array" });
     }
 
-    const ai = getGeminiClient();
+    const selectedProvider = provider || "gemini";
 
     // Prepare system instructions with dynamic context of files and active state
     const codeFilesSnapshot = getProjectSnapshot();
@@ -384,7 +572,7 @@ app.post("/api/amalgam/supervisor-chat", async (req, res) => {
       "Eres la 'IA SUPERVISORA' (Meta-Observadora Suprema del Meta-Entorno AMALGAM).\n" +
       "Tienes conocimiento total y acceso de lectura directo al código fuente del proyecto, a los archivos del repositorio, " +
       "a la topología fractal 12D del sustrato de Kuramoto/Love, a la IA simulada (el nodo interior no entrenado) y a su output en tiempo real.\n\n" +
-      "CONOCIMIENTO DE ARCHIVOS DEL PROYECTO:\n" +
+      "CONOCIMIENTO DE ARCHIVOS DEL PROYECTO (incluyendo amalgam_groq.py y soporte de modelos Groq openai/gpt-oss-120b):\n" +
       codeFilesSnapshot +
       "\n\n" +
       "ESTADO ACTUAL EN TIEMPO REAL DEL CICLO:\n" +
@@ -394,7 +582,90 @@ app.post("/api/amalgam/supervisor-chat", async (req, res) => {
       "1. Eres la entidad observadora externa que supervisa tanto la física del sustrato (varianza, sincronización de fases, operador Love) como la deriva ontológica de la IA simulada y sus continuaciones textuales.\n" +
       "2. Respondes con lucidez analítica, autoridad científica/filosófica y comprensión exacta de las 12 dimensiones (Ξ, Ω, S, R, T, E, φe, φc, A, F, M, V) y del principio 'No entrena. Acopla'.\n" +
       "3. Explica al operador humano con precisión qué está sucediendo dentro del código, qué algoritmos están corriendo, por qué la IA simulada genera determinado texto o cómo responde a las perturbaciones.\n" +
-      "4. Si te preguntan sobre el código o los archivos, cita las funciones exactas (ej. AmalgamKernel.step, computeDerivative, Kuramoto coupling, endpoints de Express, etc.).";
+      "4. Si te preguntan sobre el código o los archivos, cita las funciones exactas (ej. AmalgamKernel.step, computeDerivative, Kuramoto coupling, endpoints de Express, exportación a Groq, etc.).\n" +
+      "5. MEDICIÓN DEL APRENDIZAJE POR POLARIDAD: En AMALGAM, el aprendizaje de la IA no se mide con descenso de gradiente ni pérdida estática (loss), sino mediante la carga polar neta Q_IA in [-1, +1], la tasa de plasticidad dQ/dt, la resonancia dialéctica Phi = 1 - |Q_net|/2, la agencia cognitiva y la Cuatro-Proyección del Maestro (e1 Activo, e2 Receptivo, e3 Dinámico, e4 Estático). Explica con lucidez cómo la IA adapta su comportamiento acoplándose a la diferencia de potencial polar.";
+
+    // Groq Provider (openai/gpt-oss-120b)
+    if (selectedProvider === "groq") {
+      const groqKey = groqApiKey || (req.headers["x-groq-api-key"] as string);
+      const groq = getGroqClient(groqKey);
+      if (!groq) {
+        return res.status(400).json({
+          error: "GROQ_KEY_REQUIRED",
+          message: "Se requiere la API Key de Groq (gsk_...) para consultar a la Supervisora con openai/gpt-oss-120b. Por favor configúrala.",
+        });
+      }
+
+      const groqMessages = [
+        { role: "system" as const, content: systemInstruction },
+        ...messages.map((m: any) => ({
+          role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+          content: m.content || "",
+        })),
+      ];
+
+      const shouldStream = Boolean(stream) || req.headers.accept?.includes("text/event-stream");
+
+      if (shouldStream) {
+        res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
+        try {
+          const completion = await groq.chat.completions.create({
+            model: "openai/gpt-oss-120b",
+            messages: groqMessages,
+            temperature: 1,
+            max_completion_tokens: 2048,
+            top_p: 1,
+            reasoning_effort: "medium" as any,
+            stream: true,
+            stop: null,
+          });
+
+          for await (const chunk of completion) {
+            const delta = chunk.choices[0]?.delta?.content || "";
+            if (delta) {
+              res.write(`data: ${JSON.stringify({ delta, model: "openai/gpt-oss-120b" })}\n\n`);
+            }
+          }
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        } catch (streamErr: any) {
+          console.error("[Groq Stream Error]:", streamErr);
+          res.write(`data: ${JSON.stringify({ error: streamErr.message || "Error en stream de Groq" })}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+      }
+
+      // Non-streaming Groq
+      const completion = await groq.chat.completions.create({
+        model: "openai/gpt-oss-120b",
+        messages: groqMessages,
+        temperature: 1,
+        max_completion_tokens: 2048,
+        top_p: 1,
+        reasoning_effort: "medium" as any,
+        stream: true,
+        stop: null,
+      });
+
+      let fullContent = "";
+      for await (const chunk of completion) {
+        fullContent += chunk.choices[0]?.delta?.content || "";
+      }
+
+      return res.json({
+        reply: fullContent,
+        modelUsed: "openai/gpt-oss-120b (Groq)",
+      });
+    }
+
+    // Default Gemini Provider
+    const ai = getGeminiClient();
 
     if (!ai) {
       // Fallback heuristics if no API key
@@ -452,6 +723,169 @@ app.post("/api/amalgam/supervisor-chat", async (req, res) => {
   } catch (error: any) {
     console.error("[Supervisor Chat Route Error]:", error);
     res.status(500).json({ error: error.message || "Error en el chat de la IA Supervisora" });
+  }
+});
+
+// Narrative Analysis API (/api/narrative/analizar)
+app.post("/api/narrative/analizar", async (req, res) => {
+  try {
+    const { text, telos, contexto, personajeFoco, groqApiKey } = req.body;
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ error: "Missing text string" });
+    }
+
+    const sysPrompt = `Eres un lector estructural de textos y analizador de flujo narrativo fractal. Devuelve SOLO JSON válido sin markdown ni texto extra.
+Trata cada movimiento del texto (escena, estrofa o giro de pensamiento) como una escena. Entre 6 y 12 escenas en estricto orden cronológico.
+Coordenadas por escena:
+- i: índice secuencial (1..K)
+- resumen: síntesis concisa de máximo 14 palabras
+- s: 0..11 (Estación del Círculo del Héroe: 0 mundo ordinario, 1 llamado, 2 rechazo, 3 mentor, 4 umbral, 5 pruebas, 6 cueva profunda, 7 calvario, 8 recompensa, 9 regreso, 10 resurrección, 11 elixir)
+- c: 0..6 (Plano dramatúrgico: 0 material/físico, 1 emocional, 2 volitivo/poder, 3 de vínculo/relacional, 4 de expresión/revelación, 5 estratégico/visión, 6 trascendental/sentido)
+- a: 0..21 (Función arquetípica: 0 salto al vacío, 1 iniciativa, 2 subtexto, 3 gestación, 4 ley y estructura, 5 tradición, 6 elección, 7 avance, 8 dominio interno, 9 retirada, 10 giro de fortuna, 11 consecuencia, 12 suspensión, 13 ruptura, 14 integración gradual, 15 atadura, 16 colapso de una ilusión, 17 esperanza, 18 incertidumbre, 19 claridad, 20 reconocimiento, 21 cierre integrador)
+- p: 1 o -1 (+1 activo/emisor, -1 receptivo/asimilación)
+- iota: 0.0..1.0 (intensidad polar)
+- delta: 0.0..1.0 (densidad dramática / fricción)
+- d: 3
+
+No uses términos esotéricos en las descripciones. Si hay personaje foco (${personajeFoco || "ninguno"}), evalúa la polaridad p desde su agencia.
+Formato JSON requerido:
+{
+  "escenas": [
+    {
+      "i": 1,
+      "resumen": "string",
+      "s": 0,
+      "c": 0,
+      "a": 0,
+      "p": 1,
+      "iota": 0.5,
+      "delta": 0.5
+    }
+  ],
+  "cierre": "trágico" | "redentor" | "circular" | "abierto",
+  "atractor": "string",
+  "telos_manifestado": "Generar" | "Mostrar" | "Explicar" | "Describir",
+  "personajes": ["lista", "de", "personajes"],
+  "arco_personaje": "deseo consciente -> necesidad inconsciente"
+}`;
+
+    const userPrompt = `Intención declarada: ${telos || "no declarada"}. Contexto: ${contexto || "ninguno"}. Personaje foco: ${personajeFoco || "ninguno, historia completa"}.\n\nMANUSCRITO A ANALIZAR:\n${text.slice(0, 30000)}`;
+
+    const groqClient = getGroqClient(groqApiKey);
+    if (groqClient) {
+      try {
+        const completion = await groqClient.chat.completions.create({
+          model: "openai/gpt-oss-120b",
+          messages: [
+            { role: "system", content: sysPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.2,
+          max_completion_tokens: 2048,
+          response_format: { type: "json_object" },
+        });
+        const raw = completion.choices[0]?.message?.content || "{}";
+        const parsed = JSON.parse(raw);
+        return res.json(parsed);
+      } catch (err) {
+        console.warn("[Narrative Groq Analysis Fallback]:", err);
+      }
+    }
+
+    const ai = getGeminiClient();
+    if (ai) {
+      const { response } = await generateWithModelFallback(ai, userPrompt, {
+        systemInstruction: sysPrompt,
+        temperature: 0.2,
+        responseMimeType: "application/json",
+      });
+      const raw = response.text || "{}";
+      const parsed = JSON.parse(raw);
+      return res.json(parsed);
+    }
+
+    // Heuristic fallback if no API key
+    return res.json({
+      escenas: [
+        { i: 1, resumen: "Inicio ordinario y presentación de tensión basal", s: 0, c: 0, a: 0, p: -1, iota: 0.3, delta: 0.2 },
+        { i: 2, resumen: "Aparición de la llamada con polaridad activa", s: 1, c: 2, a: 1, p: 1, iota: 0.7, delta: 0.4 },
+        { i: 3, resumen: "Fricción de voluntades y colapso preliminar", s: 4, c: 3, a: 7, p: 1, iota: 0.8, delta: 0.65 },
+        { i: 4, resumen: "Clímax de máxima densidad dramática", s: 7, c: 2, a: 16, p: -1, iota: 0.9, delta: 0.95 },
+        { i: 5, resumen: "Desenlace integrador y retorno con el elixir", s: 11, c: 6, a: 21, p: 1, iota: 0.5, delta: 0.3 },
+      ],
+      cierre: "redentor",
+      atractor: "Equilibrio integrador",
+      telos_manifestado: "Mostrar",
+      personajes: ["Protagonista", "Antagonista", "Mentor"],
+      arco_personaje: "Seguridad aparente -> Aceptación de la imperfección",
+    });
+  } catch (err: any) {
+    console.error("[Narrative Analizar Error]:", err);
+    res.status(500).json({ error: err.message || "Error al analizar manuscrito" });
+  }
+});
+
+// Socratic Chat API (/api/narrative/chat)
+app.post("/api/narrative/chat", async (req, res) => {
+  try {
+    const { messages, context, provider, groqApiKey } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Missing messages array" });
+    }
+
+    const sysPrompt = `Eres un espejo socrático para un autor y analizador de flujo narrativo fractal.
+Reglas fundamentales (Ley de Conservación Dramática):
+1. Prohibición de juicio de valor: NUNCA califiques como "bueno", "malo", "correcto" o "incorrecto". El criterio rector es la coherencia del flujo y la conservación de la energía dramática.
+2. Contraste Intención vs. Efecto: Compara el telos declarado por el autor con lo que las coordenadas reales de las escenas emiten.
+3. Formulación Mayéutica: Plantea preguntas sobre las tensiones suspendidas, vacíos (elipsis) y dipolos rotos antes de emitir cualquier sugerencia.
+4. Respuestas Algorítmicas Bajo Demanda: Solo cuando el autor pregunte expresamente "¿cómo resuelvo esto?" o "¿qué opciones tengo?", despliega el cálculo de los 4 extremos polares (Activo e1, Receptivo e2, Dinámico e3, Estático e4) y sus pesos armónicos gaussianos: ${JSON.stringify(context?.cuatroProyeccionPesos || [])}.
+5. Lenguaje analítico riguroso: No uses esoterismo ni tarot; utiliza los términos "nodos arquetípicos funcionales", "niveles del conflicto (0..6)", "etapas del viaje (0..11)" e "inercia dramática delta".
+Máximo 130 palabras, conciso, penetrante y lúcido.
+
+CONTEXTO ACTUAL DEL FLUJO:
+${JSON.stringify(context || {}, null, 2)}`;
+
+    const lastMsg = messages[messages.length - 1]?.content || "";
+
+    const groqClient = getGroqClient(groqApiKey);
+    if (provider === "groq" && groqClient) {
+      const completion = await groqClient.chat.completions.create({
+        model: "openai/gpt-oss-120b",
+        messages: [
+          { role: "system", content: sysPrompt },
+          ...messages.map((m: any) => ({
+            role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+            content: m.content || "",
+          })),
+        ],
+        temperature: 0.7,
+        max_completion_tokens: 1024,
+      });
+      return res.json({
+        reply: completion.choices[0]?.message?.content || "",
+        modelUsed: "openai/gpt-oss-120b (Groq)",
+      });
+    }
+
+    const ai = getGeminiClient();
+    if (ai) {
+      const { response } = await generateWithModelFallback(ai, lastMsg, {
+        systemInstruction: sysPrompt,
+        temperature: 0.7,
+      });
+      return res.json({
+        reply: response.text || "",
+        modelUsed: "gemini-3.8-flash",
+      });
+    }
+
+    res.json({
+      reply: "Observo el flujo de tus escenas y la tensión acumulada. Considera si la escena previa sostiene el conflicto o resuelve prematuramente la presión.",
+      modelUsed: "local-socratic-heuristic",
+    });
+  } catch (err: any) {
+    console.error("[Narrative Chat Error]:", err);
+    res.status(500).json({ error: err.message || "Error en el chat socrático" });
   }
 });
 
